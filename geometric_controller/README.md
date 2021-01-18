@@ -1,5 +1,8 @@
 # geometric_controller
+修改说明：
+增加 fast_planner_link.launch 对港科大代码进行适配
 
+原文如下：
 Trajectory trackking controller using [mavros](https://github.com/mavlink/mavros) package in PX4 OFFBOARD mode. This is a implementation of a geometric controller and differentially flat system considering rotor drag
 
 ## Overview
