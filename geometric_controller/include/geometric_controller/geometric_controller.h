@@ -11,8 +11,12 @@
 #include <cstdlib>
 #include <string>
 #include <sstream>
+#include <iostream>
+#include <cmath>
 
 #include <Eigen/Dense>
+#include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <std_msgs/Float32.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
@@ -24,6 +28,7 @@
 #include <mavros_msgs/State.h>
 #include <mavros_msgs/CommandBool.h>
 #include <mavros_msgs/AttitudeTarget.h>
+#include <mavros_msgs/PositionTarget.h>
 #include <mavros_msgs/CompanionProcessStatus.h>
 
 #include <controller_msgs/FlatTarget.h>
@@ -64,6 +69,7 @@ class geometricCtrl
     ros::Subscriber mavtwistSub_;
     ros::Subscriber yawreferenceSub_;
     ros::Publisher rotorVelPub_, angularVelPub_, target_pose_pub_;
+    ros::Publisher lineAccPub_;
     ros::Publisher referencePosePub_;
     ros::Publisher posehistoryPub_;
     ros::Publisher systemstatusPub_;
@@ -95,10 +101,12 @@ class geometricCtrl
 
     double initTargetPos_x_, initTargetPos_y_, initTargetPos_z_;
     Eigen::Vector3d targetPos_, targetVel_, targetAcc_, targetJerk_, targetSnap_, targetPos_prev_, targetVel_prev_;
+    double targetYaw;
     Eigen::Vector3d mavPos_, mavVel_, mavRate_;
     double mavYaw_;
+    Eigen::Vector3d a_limit_des;
     Eigen::Vector3d g_;
-    Eigen::Vector4d mavAtt_, q_des;
+    Eigen::Vector4d mavAtt_, q_des,q_limit_des;
     Eigen::Vector4d cmdBodyRate_; //{wx, wy, wz, Thrust}
     Eigen::Vector3d Kpos_, Kvel_, D_;
     Eigen::Vector3d a0, a1, tau;
@@ -107,7 +115,7 @@ class geometricCtrl
     int posehistory_window_;
 
     void pubMotorCommands();
-    void pubRateCommands(const Eigen::Vector4d &cmd);
+    void pubRateCommands(const Eigen::Vector4d &cmd,const Eigen::Vector3d &a_limit_des) ;
     void pubReferencePose(const Eigen::Vector3d &target_position, const Eigen::Vector4d &target_attitude);
     void pubPoseHistory();
     void pubSystemStatus();
@@ -127,7 +135,7 @@ class geometricCtrl
     bool landCallback(std_srvs::SetBool::Request& request, std_srvs::SetBool::Response& response);
     Eigen::Matrix3d quat2RotMatrix(const Eigen::Vector4d &q);
     geometry_msgs::PoseStamped vector3d2PoseStampedMsg(Eigen::Vector3d &position, Eigen::Vector4d &orientation);
-    void computeBodyRateCmd(Eigen::Vector4d &bodyrate_cmd, const Eigen::Vector3d &target_pos, const Eigen::Vector3d &target_vel, const Eigen::Vector3d &target_acc);
+    void computeBodyRateCmd(Eigen::Vector4d &bodyrate_cmd, const Eigen::Vector3d &target_pos, const Eigen::Vector3d &target_vel, const Eigen::Vector3d &target_acc,const double &target_Yaw);
     Eigen::Vector4d quatMultiplication(const Eigen::Vector4d &q, const Eigen::Vector4d &p);
     Eigen::Vector4d attcontroller(const Eigen::Vector4d &ref_att, const Eigen::Vector3d &ref_acc, Eigen::Vector4d &curr_att);
     Eigen::Vector4d geometric_attcontroller(const Eigen::Vector4d &ref_att, const Eigen::Vector3d &ref_acc, Eigen::Vector4d &curr_att);

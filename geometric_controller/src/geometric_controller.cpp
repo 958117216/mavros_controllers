@@ -23,6 +23,7 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
                                     ros::TransportHints().tcpNoDelay());
   mavstateSub_ =
       nh_.subscribe("mavros/state", 1, &geometricCtrl::mavstateCallback, this, ros::TransportHints().tcpNoDelay());
+
   mavposeSub_ = nh_.subscribe("mavros/local_position/pose", 1, &geometricCtrl::mavposeCallback, this,
                               ros::TransportHints().tcpNoDelay());
   mavtwistSub_ = nh_.subscribe("mavros/local_position/velocity_local", 1, &geometricCtrl::mavtwistCallback, this,
@@ -33,6 +34,7 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   statusloop_timer_ = nh_.createTimer(ros::Duration(1), &geometricCtrl::statusloopCallback,
                                       this);  // Define timer for constant loop rate
 
+ // lineAccPub_=nh_.advertise<mavros_msgs::PositionTarget>("/mavros/setpoint_raw/local", 10);//防止px4退出offboard模式
   angularVelPub_ = nh_.advertise<mavros_msgs::AttitudeTarget>("command/bodyrate_command", 1);
   referencePosePub_ = nh_.advertise<geometry_msgs::PoseStamped>("reference/pose", 1);
   target_pose_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("mavros/setpoint_position/local", 10);
@@ -42,16 +44,18 @@ geometricCtrl::geometricCtrl(const ros::NodeHandle &nh, const ros::NodeHandle &n
   set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("mavros/set_mode");
   land_service_ = nh_.advertiseService("land", &geometricCtrl::landCallback, this);
 
+
+
   nh_private_.param<string>("mavname", mav_name_, "iris");
   nh_private_.param<int>("ctrl_mode", ctrl_mode_, ERROR_QUATERNION);
   nh_private_.param<bool>("enable_sim", sim_enable_, true);
   nh_private_.param<bool>("velocity_yaw", velocity_yaw_, false);
-  nh_private_.param<double>("max_acc", max_fb_acc_, 9.0);
+  nh_private_.param<double>("max_acc", max_fb_acc_, 9.0); 
   nh_private_.param<double>("yaw_heading", mavYaw_, 0.0);
   nh_private_.param<double>("drag_dx", dx_, 0.0);
   nh_private_.param<double>("drag_dy", dy_, 0.0);
   nh_private_.param<double>("drag_dz", dz_, 0.0);
-  nh_private_.param<double>("attctrl_constant", attctrl_tau_, 0.1);
+  nh_private_.param<double>("attctrl_constant", attctrl_tau_, 0.5);  //0.1
   nh_private_.param<double>("normalizedthrust_constant", norm_thrust_const_, 0.05);  // 1 / max acceleration
   nh_private_.param<double>("normalizedthrust_offset", norm_thrust_offset_, 0.1);    // 1 / max acceleration
   nh_private_.param<double>("Kp_x", Kpos_x_, 8.0);
@@ -109,6 +113,7 @@ void geometricCtrl::flattargetCallback(const controller_msgs::FlatTarget &msg) {
 
   targetPos_ = toEigen(msg.position);
   targetVel_ = toEigen(msg.velocity);
+  targetYaw=msg.yaw;
 
   if (msg.type_mask == 1) {
     targetAcc_ = toEigen(msg.acceleration);
@@ -172,6 +177,7 @@ void geometricCtrl::mavposeCallback(const geometry_msgs::PoseStamped &msg) {
   mavAtt_(1) = msg.pose.orientation.x;
   mavAtt_(2) = msg.pose.orientation.y;
   mavAtt_(3) = msg.pose.orientation.z;
+
 }
 
 void geometricCtrl::mavtwistCallback(const geometry_msgs::TwistStamped &msg) {
@@ -192,9 +198,9 @@ void geometricCtrl::cmdloopCallback(const ros::TimerEvent &event) {
       break;
 
     case MISSION_EXECUTION:
-      if (!feedthrough_enable_) computeBodyRateCmd(cmdBodyRate_, targetPos_, targetVel_, targetAcc_);
+      if (!feedthrough_enable_) computeBodyRateCmd(cmdBodyRate_, targetPos_, targetVel_, targetAcc_,targetYaw);
       pubReferencePose(targetPos_, q_des);
-      pubRateCommands(cmdBodyRate_);
+      pubRateCommands(cmdBodyRate_,a_limit_des);
       appendPoseHistory();
       pubPoseHistory();
       break;
@@ -224,6 +230,20 @@ void geometricCtrl::statusloopCallback(const ros::TimerEvent &event) {
     // This is only run if the vehicle is simulated
     arm_cmd_.request.value = true;
     offb_set_mode_.request.custom_mode = "OFFBOARD";
+      
+    // mavros_msgs::PositionTarget pos_setpoint;
+    // pos_setpoint.type_mask = 0b100111111000;  // 100 111 111 000  xyz + yaw
+    // pos_setpoint.coordinate_frame = 1;
+    // pos_setpoint.position.x = 0;
+    // pos_setpoint.position.y = 0;
+    // pos_setpoint.position.z = 1;
+    // pos_setpoint.yaw = 0;
+    //         if(current_state_.mode != "OFFBOARD")
+    //     {
+    //           lineAccPub_.publish(pos_setpoint); //触发前 悬停
+    //     }
+
+
     if (current_state_.mode != "OFFBOARD" && (ros::Time::now() - last_request_ > ros::Duration(5.0))) {
       if (set_mode_client_.call(offb_set_mode_) && offb_set_mode_.response.mode_sent) {
         ROS_INFO("Offboard enabled");
@@ -256,7 +276,7 @@ void geometricCtrl::pubReferencePose(const Eigen::Vector3d &target_position, con
   referencePosePub_.publish(msg);
 }
 
-void geometricCtrl::pubRateCommands(const Eigen::Vector4d &cmd) {
+void geometricCtrl::pubRateCommands(const Eigen::Vector4d &cmd,const Eigen::Vector3d &a_limit_des) {
   mavros_msgs::AttitudeTarget msg;
 
   msg.header.stamp = ros::Time::now();
@@ -268,6 +288,19 @@ void geometricCtrl::pubRateCommands(const Eigen::Vector4d &cmd) {
   msg.thrust = cmd(3);
 
   angularVelPub_.publish(msg);
+
+  //   mavros_msgs::PositionTarget msg;
+
+  // msg.header.stamp = ros::Time::now();
+  // msg.header.frame_id = "map";
+  // msg.coordinate_frame=1;
+  // msg.acceleration_or_force.x = a_limit_des(0);
+  // msg.acceleration_or_force.y = a_limit_des(1);
+  // msg.acceleration_or_force.z = a_limit_des(2);
+  // msg.yaw=mavYaw_;
+  // msg.type_mask = 0b100000111111;  // Ignore orientation messages
+  // std::cout<<"a:"<<a_limit_des<<std::endl;
+  // lineAccPub_.publish(msg);
 }
 
 void geometricCtrl::pubPoseHistory() {
@@ -313,14 +346,15 @@ geometry_msgs::PoseStamped geometricCtrl::vector3d2PoseStampedMsg(Eigen::Vector3
 }
 
 void geometricCtrl::computeBodyRateCmd(Eigen::Vector4d &bodyrate_cmd, const Eigen::Vector3d &target_pos,
-                                       const Eigen::Vector3d &target_vel, const Eigen::Vector3d &target_acc) {
+                                       const Eigen::Vector3d &target_vel, const Eigen::Vector3d &target_acc,const double &target_Yaw) {
   /// Compute BodyRate commands using differential flatness
   /// Controller based on Faessler 2017
   const Eigen::Vector3d a_ref = target_acc;
   if (velocity_yaw_) {
     mavYaw_ = getVelocityYaw(mavVel_);
   }
-
+  mavYaw_ =target_Yaw;
+  
   const Eigen::Vector4d q_ref = acc2quaternion(a_ref - g_, mavYaw_);
   const Eigen::Matrix3d R_ref = quat2RotMatrix(q_ref);
 
@@ -333,13 +367,23 @@ void geometricCtrl::computeBodyRateCmd(Eigen::Vector4d &bodyrate_cmd, const Eige
     a_fb = (max_fb_acc_ / a_fb.norm()) * a_fb;  // Clip acceleration if reference is too large
 
   const Eigen::Vector3d a_rd = R_ref * D_.asDiagonal() * R_ref.transpose() * target_vel;  // Rotor drag
+
   const Eigen::Vector3d a_des = a_fb + a_ref - a_rd - g_;
 
-  q_des = acc2quaternion(a_des, mavYaw_);
+
+  // Limit control angle to 45 degree 俯仰和翻滚角不会超过45度
+  double          theta = M_PI / 18;//18
+  a_limit_des=a_des;
+  if(a_limit_des(0)>=(a_limit_des(2)*tan(theta)))  a_limit_des(0)=a_limit_des(2)*tan(theta);
+  if(a_limit_des(1)>=(a_limit_des(2)*tan(theta)))  a_limit_des(1)=a_limit_des(2)*tan(theta);
+// Limit control angle to 45 degree
+
+  q_limit_des = acc2quaternion(a_limit_des, mavYaw_);
+  //q_des = acc2quaternion(a_des, mavYaw_);
 
   if (ctrl_mode_ == ERROR_GEOMETRIC) {
-    bodyrate_cmd = geometric_attcontroller(q_des, a_des, mavAtt_);  // Calculate BodyRate
-
+    //bodyrate_cmd = geometric_attcontroller(q_des, a_des, mavAtt_);  // Calculate BodyRate 不加限制，则运行该行，注释下一行
+     bodyrate_cmd = geometric_attcontroller(q_limit_des, a_limit_des, mavAtt_);  // Calculate BodyRate 加限制，则运行该行，注释上一行
   } else {
     bodyrate_cmd = attcontroller(q_des, a_des, mavAtt_);  // Calculate BodyRate
   }

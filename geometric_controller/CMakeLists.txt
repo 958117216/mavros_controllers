@@ -3,6 +3,7 @@ project(geometric_controller)
 
 add_definitions(-std=c++11)
 
+
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
@@ -14,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
   mavlink
 )
 
+
 generate_dynamic_reconfigure_options(
   cfg/GeometricController.cfg
 )
@@ -22,6 +24,7 @@ catkin_package(
   INCLUDE_DIRS include
   LIBRARIES geometric_controller
   CATKIN_DEPENDS roscpp rospy std_msgs mavros_msgs geometry_msgs sensor_msgs tf
+  ${EIGEN3_INCLUDE_DIRS}
 )
 
 #############
